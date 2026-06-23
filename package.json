@@ -1,0 +1,22 @@
+{
+  "name": "ldmfab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Application de management du departement Fabrication pharmaceutique (conforme 21 CFR Part 11)",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "install:all": "npm install --workspaces --include-workspace-root",
+    "db:setup": "npm run -w backend db:setup",
+    "seed": "npm run -w backend seed",
+    "dev:backend": "npm run -w backend dev",
+    "dev:frontend": "npm run -w frontend dev",
+    "build": "npm run -w backend build && npm run -w frontend build",
+    "test": "npm run -w backend test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

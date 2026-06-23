@@ -1,0 +1,212 @@
+// ============================================================
+//  Schema Prisma - LDMFAB
+//  Management Fabrication pharmaceutique - conforme 21 CFR Part 11
+// ------------------------------------------------------------
+//  DEV     : provider = "sqlite"     (demarre sans serveur)
+//  PROD    : provider = "postgresql" (changer la ligne ci-dessous
+//            puis adapter DATABASE_URL dans .env)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+//  UTILISATEURS / ROLES / RESPONSABILITES (RBAC)
+// ------------------------------------------------------------
+
+model User {
+  id        String  @id @default(cuid())
+  matricule String  @unique
+  email     String  @unique
+  firstName String
+  lastName  String
+  service   String?
+
+  passwordHash       String
+  mustChangePassword Boolean   @default(true)
+  passwordChangedAt  DateTime  @default(now())
+
+  isActive            Boolean   @default(true)
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+
+  // Soft delete (ALCOA+ : pas de suppression physique)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roles            UserRole[]
+  refreshTokens    RefreshToken[]
+  signatures       ElectronicSignature[]
+  auditLogs        AuditLog[]            @relation("AuditActor")
+  ofCreated        OrdreFabrication[]    @relation("OFCreatedBy")
+  ofVerified       OrdreFabrication[]    @relation("OFVerifiedBy")
+  rolesAssigned    UserRole[]            @relation("RoleAssignedBy")
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  // Liste de permissions stockee en JSON (chaine), ex: ["users:create","of:validate"]
+  permissions String  @default("[]")
+  isSystem    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userRoles UserRole[]
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  assignedAt   DateTime @default(now())
+  assignedById String?
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedBy User? @relation("RoleAssignedBy", fields: [assignedById], references: [id])
+
+  @@unique([userId, roleId])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ------------------------------------------------------------
+//  PISTE D'AUDIT (Audit Trail) - 21 CFR Part 11
+//  Enregistrements immuables : pas d'update ni delete applicatif
+// ------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+
+  userId    String?
+  userLabel String? // copie lisible (matricule + nom) conservee meme si user supprime
+
+  action   String // CREATE | UPDATE | DELETE | LOGIN | LOGIN_FAILED | LOGOUT | SIGN | EXPORT | IMPORT
+  entity   String // User | Role | OrdreFabrication | Session ...
+  entityId String?
+
+  reason   String? // motif du changement (obligatoire sur modifications critiques)
+  oldValue String? // JSON serialise
+  newValue String? // JSON serialise
+  ipAddress String?
+
+  user User? @relation("AuditActor", fields: [userId], references: [id])
+
+  @@index([entity, entityId])
+  @@index([timestamp])
+}
+
+// ------------------------------------------------------------
+//  SIGNATURES ELECTRONIQUES - 21 CFR Part 11
+// ------------------------------------------------------------
+
+model ElectronicSignature {
+  id        String   @id @default(cuid())
+  signedAt  DateTime @default(now())
+
+  userId    String
+  userLabel String // matricule + nom au moment de la signature
+
+  entity   String // OrdreFabrication ...
+  entityId String
+
+  meaning String // AUTHOR | REVIEWER | APPROVER (sens de la signature)
+  reason  String // motif / contexte de la signature
+  ipAddress String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entity, entityId])
+}
+
+// ------------------------------------------------------------
+//  ORDRES DE FABRICATION (Realisations)
+//  Mappe le modele Excel fourni
+// ------------------------------------------------------------
+
+model OrdreFabrication {
+  id String @id @default(cuid())
+
+  // -- Identification & validite --
+  dateDeclarationSF DateTime?
+  receptionOF       DateTime?
+  finValiditeOF     DateTime?
+  validiteOF        String? // ex: "OF Cloture", "En cours"
+  cndt              String? // Ligne, ex: "LIGNE OTC"
+  codeProduit       String
+  designation       String
+  numeroLot         String
+
+  // -- Etapes de fabrication (jalons dates ; null = NA / non realise) --
+  dateFinPesee        DateTime?
+  dateFinGranulation  DateTime?
+  dateFinMelange      DateTime?
+  dateFinCompRemp     DateTime?
+  dateFinPelliculage  DateTime?
+
+  // -- Quantites --
+  quantiteKg          Float?
+  quantiteFabriqueeCps Float?
+  quantiteTheoriqueKg Float?
+
+  // -- Rendements (Y %) --
+  rendementKg1   Float? // Y % (kg)
+  rendementKg2   Float? // Y % (kg)
+  rendementCps1  Float? // Y % CPS
+  rendementKg3   Float? // Y % (kg)
+  rendementCps2  Float? // Y % CPS
+  rendementTotal Float? // Rendement Total (calcule)
+
+  // -- Controle / liberation --
+  statutLibere       String? // STATUT : OUI / NON
+  dateFinFabrication DateTime?
+  verificateurNom    String? // nom importe (texte) si pas de compte lie
+  verifierId         String?
+  dateEnvoi          DateTime?
+  dateReceptionRectif DateTime?
+  dateEnvoiApresRectif DateTime?
+  aql                String? // CONFORME / NON CONFORME
+  dateFinCNDT        DateTime?
+  test3              String?
+  test4              String?
+
+  // -- Workflow & meta --
+  // CREATION -> EN_COURS -> FABRICATION_TERMINEE -> VERIFICATION
+  //   -> RECTIFICATION (option) -> CLOTURE
+  workflowStatus String  @default("CREATION")
+  createdById    String?
+
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy  User? @relation("OFCreatedBy", fields: [createdById], references: [id])
+  verifier   User? @relation("OFVerifiedBy", fields: [verifierId], references: [id])
+
+  @@index([codeProduit])
+  @@index([numeroLot])
+  @@index([workflowStatus])
+}
