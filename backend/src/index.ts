@@ -16,19 +16,11 @@ import { metaRouter } from './routes/meta';
 import { notFound, errorHandler } from './middleware/error';
 import { SYSTEM_ROLES } from './permissions';
 import { hashPassword } from './utils/auth';
-import bcrypt from 'bcryptjs';
 
 const app = express();
 
 app.use(helmet());
-app.use(cors({
-  origin: (origin, callback) => {
-    // Autoriser les requetes sans origine (Vercel, mobile) et l'origine configuree
-    if (!origin || origin === config.corsOrigin) return callback(null, true);
-    callback(null, true); // permissif en attendant la config finale
-  },
-  credentials: true,
-}));
+app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json({ limit: '2mb' }));
 if (!isProd) app.use(morgan('dev'));
 
@@ -50,14 +42,16 @@ app.use(notFound);
 app.use(errorHandler);
 
 // Auto-initialisation de la base de donnees au premier demarrage
+let initialized = false;
 async function autoInit() {
+  if (initialized) return;
+  initialized = true;
   try {
     const userCount = await prisma.user.count();
-    if (userCount > 0) return; // deja initialise
+    if (userCount > 0) return;
 
-    console.log('[ldmfab] Premiere initialisation de la base de donnees...');
+    console.log('[ldmfab] Premiere initialisation...');
 
-    // Creer les roles systeme
     const roleByName = new Map<string, string>();
     for (const r of SYSTEM_ROLES) {
       const role = await prisma.role.upsert({
@@ -68,7 +62,6 @@ async function autoInit() {
       roleByName.set(r.name, role.id);
     }
 
-    // Creer le compte admin
     const adminRoleId = roleByName.get('Administrateur')!;
     const admin = await prisma.user.create({
       data: {
@@ -83,7 +76,6 @@ async function autoInit() {
       },
     });
 
-    // Charger les donnees d'exemple
     const samples = [
       { codeProduit: 'PFMEB02', designation: 'ZINC+Vitamine C MEDIBIO+ 10 mg+250 mg', numeroLot: '14158', cndt: 'LIGNE OTC', quantiteKg: 117.14, quantiteTheoriqueKg: 119.988, rendementTotal: 97.63, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
       { codeProduit: 'PFMEB16', designation: 'Vitamine C MEDIBIO+ 500 mg', numeroLot: '14169', cndt: 'LIGNE OTC', quantiteKg: 118.12, quantiteTheoriqueKg: 119.988, rendementTotal: 98.44, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
@@ -94,19 +86,23 @@ async function autoInit() {
     for (const s of samples) {
       await prisma.ordreFabrication.create({ data: { ...s, createdById: admin.id } });
     }
-
-    console.log('[ldmfab] Base initialisee : admin + roles + 5 ordres crees.');
+    console.log('[ldmfab] Base initialisee : admin + roles + 5 ordres.');
   } catch (err) {
-    console.error('[ldmfab] Erreur auto-init (ignoree) :', err);
+    console.error('[ldmfab] Erreur auto-init :', err);
+    initialized = false; // retry on next request
   }
 }
 
-// Demarrage
-const PORT = config.port;
-app.listen(PORT, async () => {
-  console.log(`[ldmfab] API demarree sur http://localhost:${PORT} (${config.nodeEnv})`);
-  await autoInit();
-});
+// Lance l'init en arriere-plan (ne bloque pas les requetes)
+autoInit();
+
+// Developpement local uniquement
+if (!isProd) {
+  const PORT = config.port;
+  app.listen(PORT, () => {
+    console.log(`[ldmfab] API demarree sur http://localhost:${PORT}`);
+  });
+}
 
 // Export pour Vercel (serverless)
 export default app;
