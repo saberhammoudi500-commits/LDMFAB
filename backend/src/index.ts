@@ -2,8 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
 import { config, isProd } from './config';
-import { prisma } from './prisma';
 import { authRouter } from './routes/auth';
 import { usersRouter } from './routes/users';
 import { rolesRouter } from './routes/roles';
@@ -13,21 +13,19 @@ import { auditRouter } from './routes/audit';
 import { dashboardRouter } from './routes/dashboard';
 import { importExportRouter } from './routes/importExport';
 import { metaRouter } from './routes/meta';
-import { notFound, errorHandler } from './middleware/error';
-import { SYSTEM_ROLES } from './permissions';
-import { hashPassword } from './utils/auth';
+import { errorHandler } from './middleware/error';
 
 const app = express();
 
-app.use(helmet());
-app.use(cors({ origin: '*', credentials: true }));
+app.use(helmet({ contentSecurityPolicy: false }));
+if (!isProd) app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json({ limit: '2mb' }));
 if (!isProd) app.use(morgan('dev'));
 
+// Routes API
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'ldmfab-backend', time: new Date().toISOString() });
 });
-
 app.use('/api/auth', authRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/roles', rolesRouter);
@@ -38,71 +36,20 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/realisations', importExportRouter);
 app.use('/api/meta', metaRouter);
 
-app.use(notFound);
-app.use(errorHandler);
-
-// Auto-initialisation de la base de donnees au premier demarrage
-let initialized = false;
-async function autoInit() {
-  if (initialized) return;
-  initialized = true;
-  try {
-    const userCount = await prisma.user.count();
-    if (userCount > 0) return;
-
-    console.log('[ldmfab] Premiere initialisation...');
-
-    const roleByName = new Map<string, string>();
-    for (const r of SYSTEM_ROLES) {
-      const role = await prisma.role.upsert({
-        where: { name: r.name },
-        update: { permissions: JSON.stringify(r.permissions), isSystem: true },
-        create: { name: r.name, description: r.description, permissions: JSON.stringify(r.permissions), isSystem: true },
-      });
-      roleByName.set(r.name, role.id);
-    }
-
-    const adminRoleId = roleByName.get('Administrateur')!;
-    const admin = await prisma.user.create({
-      data: {
-        matricule: config.admin.matricule,
-        email: config.admin.email.toLowerCase(),
-        firstName: 'Admin',
-        lastName: 'Systeme',
-        service: 'Direction',
-        passwordHash: await hashPassword(config.admin.password),
-        mustChangePassword: true,
-        roles: { create: [{ roleId: adminRoleId }] },
-      },
-    });
-
-    const samples = [
-      { codeProduit: 'PFMEB02', designation: 'ZINC+Vitamine C MEDIBIO+ 10 mg+250 mg', numeroLot: '14158', cndt: 'LIGNE OTC', quantiteKg: 117.14, quantiteTheoriqueKg: 119.988, rendementTotal: 97.63, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
-      { codeProduit: 'PFMEB16', designation: 'Vitamine C MEDIBIO+ 500 mg', numeroLot: '14169', cndt: 'LIGNE OTC', quantiteKg: 118.12, quantiteTheoriqueKg: 119.988, rendementTotal: 98.44, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
-      { codeProduit: 'PFMEB16', designation: 'Vitamine C MEDIBIO+ 500 mg', numeroLot: '14170', cndt: 'LIGNE OTC', quantiteKg: 117.63, quantiteTheoriqueKg: 119.988, rendementTotal: 98.03, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
-      { codeProduit: 'PFMEB16', designation: 'Vitamine C MEDIBIO+ 500 mg', numeroLot: '14171', cndt: 'LIGNE OTC', quantiteKg: 118.74, quantiteTheoriqueKg: 119.988, rendementTotal: 98.96, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
-      { codeProduit: 'PFMEB16', designation: 'Vitamine C MEDIBIO+ 500 mg', numeroLot: '14172', cndt: 'LIGNE OTC', quantiteKg: 118.76, quantiteTheoriqueKg: 119.988, rendementTotal: 98.98, aql: 'CONFORME', workflowStatus: 'CLOTURE', validiteOF: 'OF Cloture' },
-    ];
-    for (const s of samples) {
-      await prisma.ordreFabrication.create({ data: { ...s, createdById: admin.id } });
-    }
-    console.log('[ldmfab] Base initialisee : admin + roles + 5 ordres.');
-  } catch (err) {
-    console.error('[ldmfab] Erreur auto-init :', err);
-    initialized = false; // retry on next request
-  }
-}
-
-// Lance l'init en arriere-plan (ne bloque pas les requetes)
-autoInit();
-
-// Developpement local uniquement
-if (!isProd) {
-  const PORT = config.port;
-  app.listen(PORT, () => {
-    console.log(`[ldmfab] API demarree sur http://localhost:${PORT}`);
+// Servir le frontend en production
+if (isProd) {
+  const frontendDist = path.join(__dirname, '../../frontend/dist');
+  app.use(express.static(frontendDist));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
   });
 }
 
-// Export pour Vercel (serverless)
+app.use(errorHandler);
+
+const PORT = config.port;
+app.listen(PORT, () => {
+  console.log(`[ldmfab] Serveur demarre sur le port ${PORT}`);
+});
+
 export default app;
