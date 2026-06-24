@@ -13,6 +13,10 @@ import { auditRouter } from './routes/audit';
 import { dashboardRouter } from './routes/dashboard';
 import { importExportRouter } from './routes/importExport';
 import { metaRouter } from './routes/meta';
+import { referentielsRouter } from './routes/referentiels';
+import { pdpRouter } from './routes/pdp';
+import { fabricationRouter } from './routes/fabrication';
+import { effectifsRouter } from './routes/effectifs';
 import { errorHandler } from './middleware/error';
 
 const app = express();
@@ -35,6 +39,10 @@ app.use('/api/audit', auditRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/realisations', importExportRouter);
 app.use('/api/meta', metaRouter);
+app.use('/api/referentiels', referentielsRouter);
+app.use('/api/pdp', pdpRouter);
+app.use('/api/fabrication', fabricationRouter);
+app.use('/api/effectifs', effectifsRouter);
 
 // Servir le frontend en production
 if (isProd) {

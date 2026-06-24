@@ -1,10 +1,7 @@
 // ============================================================
-//  Schema Prisma - LDMFAB
-//  Management Fabrication pharmaceutique - conforme 21 CFR Part 11
-// ------------------------------------------------------------
-//  DEV     : provider = "sqlite"     (demarre sans serveur)
-//  PROD    : provider = "postgresql" (changer la ligne ci-dessous
-//            puis adapter DATABASE_URL dans .env)
+//  Schema Prisma - LDMFAB v2.0
+//  Management Fabrication pharmaceutique - CDC-PROD-PHARMA-2026-V1.0
+//  Modules M1-M11 (BPF / GMP / ALCOA+ / 21 CFR Part 11)
 // ============================================================
 
 generator client {
@@ -17,9 +14,368 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ------------------------------------------------------------
-//  UTILISATEURS / ROLES / RESPONSABILITES (RBAC)
-// ------------------------------------------------------------
+// ============================================================
+//  M1 - REFERENTIELS ET DONNEES DE BASE
+// ============================================================
+
+model DonneurOrdre {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  nom         String
+  description String?
+  actif       Boolean  @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  produits   Produit[]
+  pdpLignes  PdpLigne[]
+}
+
+model FormeGalenique {
+  id   String @id @default(cuid())
+  code String @unique
+  nom  String
+
+  produits Produit[]
+}
+
+model Produit {
+  id               String   @id @default(cuid())
+  codePF           String   @unique
+  designation      String
+  donneurOrdreId   String
+  formeGaleniqueId String
+  activite         String?
+  uniteConditionnement String?
+  nbUnitesParBoite     Int?
+  tailleStandardLot    Float?
+  dureeVie             Int?
+  aql                  String?
+  actif                Boolean  @default(true)
+  deletedAt            DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  donneurOrdre     DonneurOrdre   @relation(fields: [donneurOrdreId], references: [id])
+  formeGalenique   FormeGalenique @relation(fields: [formeGaleniqueId], references: [id])
+
+  cadences          Cadence[]
+  pcsuHistorique    Pcsu[]
+  phasesStandard    PhaseStandard[]
+  pdpLignes         PdpLigne[]
+  ordresFabrication OrdreFabrication[]
+
+  @@index([codePF])
+  @@index([donneurOrdreId])
+}
+
+model Equipement {
+  id       String   @id @default(cuid())
+  code     String   @unique
+  nom      String
+  atelier  String
+  type     String?
+  actif    Boolean  @default(true)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cadences          Cadence[]
+  phasesRealisation PhaseRealisation[]
+  conditionnements  Conditionnement[]
+}
+
+model Cadence {
+  id            String   @id @default(cuid())
+  produitId     String
+  equipementId  String
+  typeOperation String
+  uniteHeure    Float
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  produit    Produit    @relation(fields: [produitId], references: [id])
+  equipement Equipement @relation(fields: [equipementId], references: [id])
+
+  @@unique([produitId, equipementId, typeOperation])
+}
+
+model PhaseStandard {
+  id        String  @id @default(cuid())
+  produitId String
+  phase     String
+  qteCible  Float
+
+  produit   Produit @relation(fields: [produitId], references: [id])
+
+  @@unique([produitId, phase])
+}
+
+model Pcsu {
+  id        String   @id @default(cuid())
+  produitId String
+  activite  String?
+  valeur    Float
+  dateEffet DateTime
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+
+  produit   Produit  @relation(fields: [produitId], references: [id])
+
+  @@index([produitId, dateEffet])
+}
+
+// ============================================================
+//  M2 - PLANIFICATION (PDP)
+// ============================================================
+
+model Pdp {
+  id        String   @id @default(cuid())
+  annee     Int
+  mois      Int
+  valide    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lignes     PdpLigne[]
+  calendrier CalendrierJour[]
+
+  @@unique([annee, mois])
+}
+
+model PdpLigne {
+  id             String @id @default(cuid())
+  pdpId          String
+  produitId      String
+  donneurOrdreId String
+
+  planQteFab    Float? @default(0)
+  planQteCndt   Float? @default(0)
+  planValeur    Float? @default(0)
+  realiseFab    Float? @default(0)
+  realiseCndt   Float? @default(0)
+  realiseValeur Float? @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pdp          Pdp          @relation(fields: [pdpId], references: [id])
+  produit      Produit      @relation(fields: [produitId], references: [id])
+  donneurOrdre DonneurOrdre @relation(fields: [donneurOrdreId], references: [id])
+
+  @@unique([pdpId, produitId])
+}
+
+model CalendrierJour {
+  id    String   @id @default(cuid())
+  pdpId String
+  date  DateTime @db.Date
+  type  String
+
+  pdp   Pdp      @relation(fields: [pdpId], references: [id])
+
+  @@unique([pdpId, date])
+}
+
+// ============================================================
+//  M3 - ORDRES DE FABRICATION
+// ============================================================
+
+model OrdreFabrication {
+  id        String @id @default(cuid())
+  numeroOF  String @unique
+  produitId String
+  numeroLot String
+
+  receptionOF   DateTime?
+  finValiditeOF DateTime?
+  tailleLoT     Float?
+  qteTheorique  Float?
+
+  // Workflow: RECU -> EN_COURS -> SF_DECLARE -> CONDITIONNE -> CLOTURE
+  workflowStatus String @default("RECU")
+
+  dateDeclarationSF DateTime?
+  qteSF             Float?
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  produit    Produit @relation(fields: [produitId], references: [id])
+  createdBy  User?   @relation("OFCreatedBy", fields: [createdById], references: [id])
+
+  prolongations     ProlongationOF[]
+  phasesRealisation PhaseRealisation[]
+  conditionnement   Conditionnement?
+  ddl               DossierLot?
+  signatures        ElectronicSignature[]
+  auditLogs         AuditLog[]            @relation("AuditOF")
+
+  @@index([produitId])
+  @@index([numeroLot])
+  @@index([workflowStatus])
+  @@index([finValiditeOF])
+}
+
+model ProlongationOF {
+  id              String   @id @default(cuid())
+  ofId            String
+  dateDemande     DateTime @default(now())
+  dateFinActuelle DateTime?
+  dureeTraitement Int?
+  observation     String?
+  statut          String   @default("EN_ATTENTE")
+  traitePar       String?
+  traiteAt        DateTime?
+
+  of OrdreFabrication @relation(fields: [ofId], references: [id])
+}
+
+// ============================================================
+//  M4 - SUIVI FABRICATION PAR PHASE ET ATELIER
+// ============================================================
+
+model PhaseRealisation {
+  id            String   @id @default(cuid())
+  ofId          String
+  phase         String   // PESEE | GRANULATION | MELANGE | COMPRESSION | GELULE | PELLICULAGE | CREME
+  equipementId  String?
+
+  dateDebut     DateTime?
+  dateFin       DateTime?
+
+  qteEntreeKg   Float?
+  qteSortieKg   Float?
+  qteEntreeUn   Float?
+  qteSortieUn   Float?
+
+  rendementKg   Float?
+  rendementUn   Float?
+  avarieKg      Float?
+  avarieUn      Float?
+
+  operateurId   String?
+  superviseurId String?
+
+  statut        String  @default("EN_COURS")
+  observation   String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  of            OrdreFabrication @relation(fields: [ofId], references: [id])
+  equipement    Equipement?      @relation(fields: [equipementId], references: [id])
+  operateur     User?            @relation("PhaseOperateur", fields: [operateurId], references: [id])
+  superviseur   User?            @relation("PhaseSuperviseur", fields: [superviseurId], references: [id])
+
+  @@unique([ofId, phase])
+  @@index([ofId])
+}
+
+// ============================================================
+//  M5 - SUIVI CONDITIONNEMENT
+// ============================================================
+
+model Conditionnement {
+  id            String   @id @default(cuid())
+  ofId          String   @unique
+  equipementId  String?
+
+  dateDebutCndt DateTime?
+  dateFinCndt   DateTime?
+
+  qteFabrique   Float?
+  qteCndt       Float?
+  qteRestante   Float?
+  tauxCndt      Float?
+
+  operateurId   String?
+  superviseurId String?
+  statut        String   @default("EN_ATTENTE")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  of            OrdreFabrication @relation(fields: [ofId], references: [id])
+  equipement    Equipement?      @relation(fields: [equipementId], references: [id])
+  operateur     User?            @relation("CndtOperateur", fields: [operateurId], references: [id])
+  superviseur   User?            @relation("CndtSuperviseur", fields: [superviseurId], references: [id])
+
+  @@index([statut])
+}
+
+// ============================================================
+//  M7 - DOSSIERS DE LOT (DDL)
+// ============================================================
+
+model DossierLot {
+  id             String   @id @default(cuid())
+  ofId           String   @unique
+  verificateurId String?
+
+  dateEmission     DateTime?
+  dateEnvoi        DateTime?
+  dateReception    DateTime?
+  dateVerification DateTime?
+  dateValidation   DateTime?
+
+  dateEnvoiRectif     DateTime?
+  dateReceptionRectif DateTime?
+  dateRenvoi          DateTime?
+
+  statut      String  @default("A_EMETTRE")
+  observation String?
+  joursAttente Int?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  of           OrdreFabrication @relation(fields: [ofId], references: [id])
+  verificateur User?            @relation("DDLVerificateur", fields: [verificateurId], references: [id])
+}
+
+// ============================================================
+//  M9 - EFFECTIFS (HC)
+// ============================================================
+
+model Employe {
+  id          String   @id @default(cuid())
+  matricule   String   @unique
+  nom         String
+  prenom      String
+  typeContrat String
+  grade       String
+  fonction    String?
+  service     String?
+  managerId   String?
+  actif       Boolean  @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  manager     Employe?  @relation("Organigramme", fields: [managerId], references: [id])
+  subordonnes Employe[] @relation("Organigramme")
+}
+
+model BudgetPoste {
+  id        String   @id @default(cuid())
+  annee     Int
+  grade     String
+  fonction  String?
+  qteBudget Int
+  qteActuel Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([annee, grade, fonction])
+}
+
+// ============================================================
+//  UTILISATEURS / ROLES / RBAC
+// ============================================================
 
 model User {
   id        String  @id @default(cuid())
@@ -30,34 +386,36 @@ model User {
   service   String?
 
   passwordHash       String
-  mustChangePassword Boolean   @default(true)
-  passwordChangedAt  DateTime  @default(now())
+  mustChangePassword Boolean  @default(true)
+  passwordChangedAt  DateTime @default(now())
 
   isActive            Boolean   @default(true)
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
   lastLoginAt         DateTime?
 
-  // Soft delete (ALCOA+ : pas de suppression physique)
   deletedAt DateTime?
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  roles            UserRole[]
-  refreshTokens    RefreshToken[]
-  signatures       ElectronicSignature[]
-  auditLogs        AuditLog[]            @relation("AuditActor")
-  ofCreated        OrdreFabrication[]    @relation("OFCreatedBy")
-  ofVerified       OrdreFabrication[]    @relation("OFVerifiedBy")
-  rolesAssigned    UserRole[]            @relation("RoleAssignedBy")
+  roles         UserRole[]
+  refreshTokens RefreshToken[]
+  signatures    ElectronicSignature[]
+  auditLogs     AuditLog[]            @relation("AuditActor")
+  ofCreated     OrdreFabrication[]    @relation("OFCreatedBy")
+  rolesAssigned UserRole[]            @relation("RoleAssignedBy")
+
+  phasesOperateur   PhaseRealisation[] @relation("PhaseOperateur")
+  phasesSuperviseur PhaseRealisation[] @relation("PhaseSuperviseur")
+  cndtOperateur     Conditionnement[]  @relation("CndtOperateur")
+  cndtSuperviseur   Conditionnement[]  @relation("CndtSuperviseur")
+  ddlVerificateur   DossierLot[]       @relation("DDLVerificateur")
 }
 
 model Role {
   id          String  @id @default(cuid())
   name        String  @unique
   description String?
-  // Liste de permissions stockee en JSON (chaine), ex: ["users:create","of:validate"]
   permissions String  @default("[]")
   isSystem    Boolean @default(false)
 
@@ -83,131 +441,67 @@ model UserRole {
 }
 
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// ------------------------------------------------------------
-//  PISTE D'AUDIT (Audit Trail) - 21 CFR Part 11
-//  Enregistrements immuables : pas d'update ni delete applicatif
-// ------------------------------------------------------------
+// ============================================================
+//  PISTE D'AUDIT (Audit Trail) - 21 CFR Part 11 / ALCOA+
+// ============================================================
 
 model AuditLog {
   id        String   @id @default(cuid())
   timestamp DateTime @default(now())
 
   userId    String?
-  userLabel String? // copie lisible (matricule + nom) conservee meme si user supprime
+  userLabel String?
 
-  action   String // CREATE | UPDATE | DELETE | LOGIN | LOGIN_FAILED | LOGOUT | SIGN | EXPORT | IMPORT
-  entity   String // User | Role | OrdreFabrication | Session ...
-  entityId String?
+  action    String
+  entity    String
+  entityId  String?
 
-  reason   String? // motif du changement (obligatoire sur modifications critiques)
-  oldValue String? // JSON serialise
-  newValue String? // JSON serialise
+  reason    String?
+  oldValue  String?
+  newValue  String?
   ipAddress String?
 
-  user User? @relation("AuditActor", fields: [userId], references: [id])
+  ofId String?
+
+  user User?             @relation("AuditActor", fields: [userId], references: [id])
+  of   OrdreFabrication? @relation("AuditOF", fields: [ofId], references: [id])
 
   @@index([entity, entityId])
   @@index([timestamp])
+  @@index([userId])
 }
 
-// ------------------------------------------------------------
+// ============================================================
 //  SIGNATURES ELECTRONIQUES - 21 CFR Part 11
-// ------------------------------------------------------------
+// ============================================================
 
 model ElectronicSignature {
   id        String   @id @default(cuid())
   signedAt  DateTime @default(now())
 
   userId    String
-  userLabel String // matricule + nom au moment de la signature
+  userLabel String
 
-  entity   String // OrdreFabrication ...
-  entityId String
+  ofId      String?
+  entity    String
+  entityId  String
 
-  meaning String // AUTHOR | REVIEWER | APPROVER (sens de la signature)
-  reason  String // motif / contexte de la signature
+  meaning   String
+  reason    String
   ipAddress String?
 
-  user User @relation(fields: [userId], references: [id])
+  user User             @relation(fields: [userId], references: [id])
+  of   OrdreFabrication? @relation(fields: [ofId], references: [id])
 
   @@index([entity, entityId])
-}
-
-// ------------------------------------------------------------
-//  ORDRES DE FABRICATION (Realisations)
-//  Mappe le modele Excel fourni
-// ------------------------------------------------------------
-
-model OrdreFabrication {
-  id String @id @default(cuid())
-
-  // -- Identification & validite --
-  dateDeclarationSF DateTime?
-  receptionOF       DateTime?
-  finValiditeOF     DateTime?
-  validiteOF        String? // ex: "OF Cloture", "En cours"
-  cndt              String? // Ligne, ex: "LIGNE OTC"
-  codeProduit       String
-  designation       String
-  numeroLot         String
-
-  // -- Etapes de fabrication (jalons dates ; null = NA / non realise) --
-  dateFinPesee        DateTime?
-  dateFinGranulation  DateTime?
-  dateFinMelange      DateTime?
-  dateFinCompRemp     DateTime?
-  dateFinPelliculage  DateTime?
-
-  // -- Quantites --
-  quantiteKg          Float?
-  quantiteFabriqueeCps Float?
-  quantiteTheoriqueKg Float?
-
-  // -- Rendements (Y %) --
-  rendementKg1   Float? // Y % (kg)
-  rendementKg2   Float? // Y % (kg)
-  rendementCps1  Float? // Y % CPS
-  rendementKg3   Float? // Y % (kg)
-  rendementCps2  Float? // Y % CPS
-  rendementTotal Float? // Rendement Total (calcule)
-
-  // -- Controle / liberation --
-  statutLibere       String? // STATUT : OUI / NON
-  dateFinFabrication DateTime?
-  verificateurNom    String? // nom importe (texte) si pas de compte lie
-  verifierId         String?
-  dateEnvoi          DateTime?
-  dateReceptionRectif DateTime?
-  dateEnvoiApresRectif DateTime?
-  aql                String? // CONFORME / NON CONFORME
-  dateFinCNDT        DateTime?
-  test3              String?
-  test4              String?
-
-  // -- Workflow & meta --
-  // CREATION -> EN_COURS -> FABRICATION_TERMINEE -> VERIFICATION
-  //   -> RECTIFICATION (option) -> CLOTURE
-  workflowStatus String  @default("CREATION")
-  createdById    String?
-
-  deletedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  createdBy  User? @relation("OFCreatedBy", fields: [createdById], references: [id])
-  verifier   User? @relation("OFVerifiedBy", fields: [verifierId], references: [id])
-
-  @@index([codeProduit])
-  @@index([numeroLot])
-  @@index([workflowStatus])
 }
