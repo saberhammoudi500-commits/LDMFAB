@@ -1,7 +1,11 @@
 import axios from 'axios';
 
+// En production (Vercel), VITE_API_URL pointe vers le backend Vercel.
+// En développement local, le proxy Vite redirige /api vers localhost:4000.
+const BASE_URL = import.meta.env.VITE_API_URL ?? '/api';
+
 export const api = axios.create({
-  baseURL: '/api',
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -39,7 +43,7 @@ api.interceptors.response.use(
       try {
         if (!refreshing) {
           refreshing = axios
-            .post('/api/auth/refresh', { refreshToken: stored })
+            .post(`${BASE_URL}/auth/refresh`, { refreshToken: stored })
             .then((res) => res.data.accessToken as string)
             .catch(() => null)
             .finally(() => {
