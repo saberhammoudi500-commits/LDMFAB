@@ -1,24 +1,22 @@
 import { useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Lock } from 'lucide-react';
-import { api, apiError } from '../api/client';
+import { fetchRoles, updateRolePermissions, writeAudit } from '../lib/db';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
+import { PERMISSIONS_LIST } from '../lib/permissions';
 import type { Role } from '../lib/types';
-
-interface PermDef { key: string; label: string; }
 
 export function RolesPage() {
   const { can } = useAuth();
   const [roles, setRoles] = useState<Role[]>([]);
-  const [perms, setPerms] = useState<PermDef[]>([]);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Role | null>(null);
   const [form, setForm] = useState<{ name: string; description: string; permissions: string[] }>({ name: '', description: '', permissions: [] });
 
   function load() {
-    api.get('/roles').then((r) => setRoles(r.data)).catch((e) => setError(apiError(e)));
-    api.get('/roles/permissions').then((r) => setPerms(r.data)).catch(() => {});
+    fetchRoles().then(setRoles).catch((e) => setError(e.message));
   }
   useEffect(load, []);
 
@@ -41,22 +39,28 @@ export function RolesPage() {
   async function save() {
     setError('');
     try {
-      if (editing) await api.put(`/roles/${editing.id}`, form);
-      else await api.post('/roles', form);
+      if (editing) {
+        await updateRolePermissions(editing.id, form.permissions);
+        const { error: err } = await supabase.from('roles').update({ description: form.description }).eq('id', editing.id);
+        if (err) throw new Error(err.message);
+      } else {
+        const { data, error: err } = await supabase.from('roles').insert({ name: form.name, description: form.description, permissions: form.permissions, is_system: false }).select().single();
+        if (err) throw new Error(err.message);
+        await writeAudit({ action: 'CREATE', entity: 'Role', entityId: data.id, newValue: form });
+      }
       setOpen(false);
       load();
-    } catch (e) {
-      setError(apiError(e));
+    } catch (e: any) {
+      setError(e.message);
     }
   }
+
   async function remove(r: Role) {
     if (!window.confirm(`Supprimer le role « ${r.name} » ?`)) return;
-    try {
-      await api.delete(`/roles/${r.id}`);
-      load();
-    } catch (e) {
-      setError(apiError(e));
-    }
+    const { error: err } = await supabase.from('roles').delete().eq('id', r.id);
+    if (err) { setError(err.message); return; }
+    await writeAudit({ action: 'DELETE', entity: 'Role', entityId: r.id });
+    load();
   }
 
   const canManage = can('roles:manage');
@@ -76,8 +80,7 @@ export function RolesPage() {
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="flex items-center gap-2 font-semibold text-slate-800">
-                  {r.name}
-                  {r.isSystem && <Lock size={13} className="text-slate-400" />}
+                  {r.name}{r.isSystem && <Lock size={13} className="text-slate-400" />}
                 </h3>
                 <p className="text-xs text-slate-500">{r.description}</p>
               </div>
@@ -89,7 +92,7 @@ export function RolesPage() {
               )}
             </div>
             <div className="mt-3 text-xs text-slate-500">
-              <span className="font-medium">{r.permissions.length}</span> permission(s) — {r.userCount ?? 0} utilisateur(s)
+              <span className="font-medium">{r.permissions.length}</span> permission(s)
             </div>
             <div className="mt-2 flex flex-wrap gap-1">
               {r.permissions.slice(0, 6).map((p) => (
@@ -104,19 +107,13 @@ export function RolesPage() {
       <Modal open={open} title={editing ? `Modifier le role ${editing.name}` : 'Nouveau role'} onClose={() => setOpen(false)} size="lg">
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Nom du role *</label>
-              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Description</label>
-              <input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-            </div>
+            <div><label className="label">Nom du role *</label><input className="input" value={form.name} disabled={!!editing} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+            <div><label className="label">Description</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
           </div>
           <div>
             <label className="label">Permissions</label>
             <div className="grid max-h-72 grid-cols-1 gap-1 overflow-y-auto rounded border border-slate-200 p-3 md:grid-cols-2">
-              {perms.map((p) => (
+              {PERMISSIONS_LIST.map((p) => (
                 <label key={p.key} className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-slate-50">
                   <input type="checkbox" checked={form.permissions.includes(p.key)} onChange={() => togglePerm(p.key)} />
                   <span>{p.label}</span>

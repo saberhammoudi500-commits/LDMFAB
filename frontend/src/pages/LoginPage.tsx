@@ -2,10 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FlaskConical } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { apiError } from '../api/client';
 
 export function LoginPage() {
-  const { login, user, mustChangePassword } = useAuth();
+  const { login, user } = useAuth();
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -13,7 +12,7 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   if (user) {
-    navigate(mustChangePassword ? '/changer-mot-de-passe' : '/', { replace: true });
+    navigate(user.mustChangePassword ? '/changer-mot-de-passe' : '/', { replace: true });
   }
 
   async function submit(e: React.FormEvent) {
@@ -24,7 +23,7 @@ export function LoginPage() {
       await login(identifier, password);
       navigate('/', { replace: true });
     } catch (err) {
-      setError(apiError(err));
+      setError(err instanceof Error ? err.message : 'Erreur inattendue.');
     } finally {
       setLoading(false);
     }

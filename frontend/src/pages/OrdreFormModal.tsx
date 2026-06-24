@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { Modal } from '../components/Modal';
-import { api, apiError } from '../api/client';
+import { createOrdre, updateOrdre } from '../lib/db';
 import { toDateInput } from '../lib/format';
 import type { OrdreFabrication } from '../lib/types';
 
 interface Props {
-  open: boolean;
-  ordre: OrdreFabrication | null; // null = creation
+  of: OrdreFabrication | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -47,21 +46,13 @@ function Field({ label, name, state, set, type = 'text' }: { label: string; name
   );
 }
 
-export function OrdreFormModal({ open, ordre, onClose, onSaved }: Props) {
+export function OrdreFormModal({ of: ordre, onClose, onSaved }: Props) {
   const [state, setState] = useState<FormState>(() => initState(ordre));
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // Reinitialise a l'ouverture
-  const [key, setKey] = useState('');
-  const currentKey = ordre?.id ?? 'new';
-  if (open && key !== currentKey) {
-    setKey(currentKey);
-    setState(initState(ordre));
-    setReason('');
-    setError('');
-  }
+
 
   function set(name: string, value: string) {
     setState((s) => ({ ...s, [name]: value }));
@@ -92,21 +83,20 @@ export function OrdreFormModal({ open, ordre, onClose, onSaved }: Props) {
           setSaving(false);
           return;
         }
-        await api.put(`/ordres/${ordre.id}`, { ...payload, reason });
+        await updateOrdre(ordre.id, payload as any, reason);
       } else {
-        await api.post('/ordres', payload);
+        await createOrdre(payload as any);
       }
       onSaved();
-      onClose();
-    } catch (err) {
-      setError(apiError(err));
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <Modal open={open} title={ordre ? `Modifier OF — lot ${ordre.numeroLot}` : 'Nouvel ordre de fabrication'} onClose={onClose} size="xl">
+    <Modal open title={ordre ? `Modifier OF — lot ${ordre.numeroLot}` : 'Nouvel ordre de fabrication'} onClose={onClose} size="xl">
       <div className="space-y-5">
         <section>
           <h3 className="mb-2 text-sm font-semibold text-brand-800">Identification &amp; validite</h3>

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useAuth } from '../auth/AuthContext';
 
 export function ProtectedRoute({ children, perm }: { children: ReactNode; perm?: string }) {
-  const { user, loading, can, mustChangePassword } = useAuth();
+  const { user, loading, can } = useAuth();
 
   if (loading) {
     return (
@@ -11,7 +11,7 @@ export function ProtectedRoute({ children, perm }: { children: ReactNode; perm?:
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  if (mustChangePassword) return <Navigate to="/changer-mot-de-passe" replace />;
+  if (user.mustChangePassword) return <Navigate to="/changer-mot-de-passe" replace />;
   if (perm && !can(perm)) {
     return (
       <div className="p-10 text-center text-slate-500">

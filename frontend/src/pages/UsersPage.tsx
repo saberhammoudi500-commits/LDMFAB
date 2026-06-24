@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, Pencil, KeyRound, UserX } from 'lucide-react';
-import { api, apiError } from '../api/client';
+import { fetchUsers, fetchRoles, createUser, toggleUserActive, writeAudit } from '../lib/db';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
 import { frDateTime } from '../lib/format';
@@ -13,13 +14,11 @@ export function UsersPage() {
   const [error, setError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
-
-  // form
   const [form, setForm] = useState({ matricule: '', email: '', firstName: '', lastName: '', service: '', password: '', roleIds: [] as string[] });
 
   function load() {
-    api.get('/users').then((r) => setUsers(r.data)).catch((e) => setError(apiError(e)));
-    api.get('/roles').then((r) => setRoles(r.data)).catch(() => {});
+    fetchUsers().then(setUsers).catch((e) => setError(e.message));
+    fetchRoles().then(setRoles).catch(() => {});
   }
   useEffect(load, []);
 
@@ -35,7 +34,6 @@ export function UsersPage() {
     setError('');
     setModalOpen(true);
   }
-
   function toggleRole(id: string) {
     setForm((f) => ({ ...f, roleIds: f.roleIds.includes(id) ? f.roleIds.filter((r) => r !== id) : [...f.roleIds, id] }));
   }
@@ -44,28 +42,25 @@ export function UsersPage() {
     setError('');
     try {
       if (editing) {
-        await api.put(`/users/${editing.id}`, {
-          firstName: form.firstName, lastName: form.lastName, service: form.service || null, roleIds: form.roleIds,
-          reason: 'Mise a jour fiche utilisateur',
-        });
+        // Mise à jour des informations de profil
+        const { error: err } = await supabase.from('profiles').update({
+          first_name: form.firstName, last_name: form.lastName, service: form.service || null,
+        }).eq('id', editing.id);
+        if (err) throw new Error(err.message);
+
+        // Mise à jour des rôles
+        await supabase.from('user_roles').delete().eq('user_id', editing.id);
+        if (form.roleIds.length > 0) {
+          await supabase.from('user_roles').insert(form.roleIds.map((roleId) => ({ user_id: editing.id, role_id: roleId })));
+        }
+        await writeAudit({ action: 'UPDATE', entity: 'User', entityId: editing.id, reason: 'Mise à jour fiche utilisateur' });
       } else {
-        await api.post('/users', { ...form, service: form.service || null });
+        await createUser({ email: form.email, matricule: form.matricule, firstName: form.firstName, lastName: form.lastName, service: form.service || undefined, password: form.password, roleIds: form.roleIds });
       }
       setModalOpen(false);
       load();
-    } catch (e) {
-      setError(apiError(e));
-    }
-  }
-
-  async function resetPassword(u: UserRow) {
-    const pwd = window.prompt(`Nouveau mot de passe temporaire pour ${u.firstName} ${u.lastName} :`);
-    if (!pwd) return;
-    try {
-      await api.post(`/users/${u.id}/reset-password`, { newPassword: pwd, reason: 'Reinitialisation admin' });
-      alert('Mot de passe reinitialise. L\'utilisateur devra le changer a la prochaine connexion.');
-    } catch (e) {
-      setError(apiError(e));
+    } catch (e: any) {
+      setError(e.message);
     }
   }
 
@@ -73,10 +68,10 @@ export function UsersPage() {
     const reason = window.prompt(`Motif de desactivation du compte ${u.matricule} :`);
     if (!reason) return;
     try {
-      await api.delete(`/users/${u.id}`, { data: { reason } });
+      await toggleUserActive(u.id, false);
       load();
-    } catch (e) {
-      setError(apiError(e));
+    } catch (e: any) {
+      setError(e.message);
     }
   }
 
@@ -119,9 +114,6 @@ export function UsersPage() {
                     {can('users:update') && (
                       <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand-700" title="Modifier" onClick={() => openEdit(u)}><Pencil size={16} /></button>
                     )}
-                    {can('users:update') && (
-                      <button className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-amber-600" title="Reinitialiser mot de passe" onClick={() => resetPassword(u)}><KeyRound size={16} /></button>
-                    )}
                     {can('users:delete') && u.isActive && (
                       <button className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600" title="Desactiver" onClick={() => deactivate(u)}><UserX size={16} /></button>
                     )}
@@ -136,35 +128,15 @@ export function UsersPage() {
       <Modal open={modalOpen} title={editing ? 'Modifier utilisateur' : 'Nouvel utilisateur'} onClose={() => setModalOpen(false)}>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Matricule *</label>
-              <input className="input" value={form.matricule} disabled={!!editing} onChange={(e) => setForm({ ...form, matricule: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Email *</label>
-              <input className="input" value={form.email} disabled={!!editing} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Prenom *</label>
-              <input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Nom *</label>
-              <input className="input" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Service</label>
-              <input className="input" value={form.service} onChange={(e) => setForm({ ...form, service: e.target.value })} />
-            </div>
-            {!editing && (
-              <div>
-                <label className="label">Mot de passe initial *</label>
-                <input className="input" type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Ex: Pharma@2026" />
-              </div>
-            )}
+            <div><label className="label">Matricule *</label><input className="input" value={form.matricule} disabled={!!editing} onChange={(e) => setForm({ ...form, matricule: e.target.value })} /></div>
+            <div><label className="label">Email *</label><input className="input" value={form.email} disabled={!!editing} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
+            <div><label className="label">Prenom *</label><input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></div>
+            <div><label className="label">Nom *</label><input className="input" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></div>
+            <div><label className="label">Service</label><input className="input" value={form.service} onChange={(e) => setForm({ ...form, service: e.target.value })} /></div>
+            {!editing && <div><label className="label">Mot de passe initial *</label><input className="input" type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Ex: Pharma@2026" /></div>}
           </div>
           <div>
-            <label className="label">Roles &amp; responsabilites</label>
+            <label className="label">Roles</label>
             <div className="flex flex-wrap gap-2">
               {roles.map((r) => (
                 <button key={r.id} type="button" onClick={() => toggleRole(r.id)}

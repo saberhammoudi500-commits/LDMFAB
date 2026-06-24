@@ -1,19 +1,18 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { api, apiError } from '../api/client';
+import { fetchAuditLogs } from '../lib/db';
 import { frDateTime } from '../lib/format';
 import type { Paginated } from '../lib/types';
 
 interface AuditEntry {
   id: string;
   timestamp: string;
-  userLabel: string | null;
+  user_label: string | null;
   action: string;
   entity: string;
-  entityId: string | null;
+  entity_id: string | null;
   reason: string | null;
-  ipAddress: string | null;
-  oldValue: unknown;
-  newValue: unknown;
+  old_value: unknown;
+  new_value: unknown;
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -21,11 +20,11 @@ const ACTION_COLORS: Record<string, string> = {
   UPDATE: 'bg-blue-100 text-blue-700',
   DELETE: 'bg-red-100 text-red-700',
   LOGIN: 'bg-slate-100 text-slate-600',
-  LOGIN_FAILED: 'bg-orange-100 text-orange-700',
   LOGOUT: 'bg-slate-100 text-slate-600',
   SIGN: 'bg-purple-100 text-purple-700',
   EXPORT: 'bg-cyan-100 text-cyan-700',
   IMPORT: 'bg-amber-100 text-amber-700',
+  PASSWORD_CHANGE: 'bg-orange-100 text-orange-700',
 };
 
 export function AuditPage() {
@@ -37,10 +36,9 @@ export function AuditPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    const params = new URLSearchParams({ page: String(page), pageSize: '50' });
-    if (entity) params.set('entity', entity);
-    if (action) params.set('action', action);
-    api.get(`/audit?${params.toString()}`).then((r) => setResult(r.data)).catch((e) => setError(apiError(e)));
+    fetchAuditLogs({ page, pageSize: 50, entity: entity || undefined, action: action || undefined })
+      .then((r) => setResult(r as any))
+      .catch((e) => setError(e.message));
   }, [page, entity, action]);
 
   useEffect(() => { load(); }, [load]);
@@ -67,7 +65,7 @@ export function AuditPage() {
           <label className="label">Action</label>
           <select className="input" value={action} onChange={(e) => { setPage(1); setAction(e.target.value); }}>
             <option value="">Toutes</option>
-            {['CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGIN_FAILED', 'LOGOUT', 'SIGN', 'EXPORT', 'IMPORT'].map((a) => (
+            {['CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGOUT', 'SIGN', 'EXPORT', 'IMPORT', 'PASSWORD_CHANGE'].map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
           </select>
@@ -81,7 +79,7 @@ export function AuditPage() {
           <thead className="bg-slate-50">
             <tr>
               <th className="th">Horodatage</th><th className="th">Utilisateur</th><th className="th">Action</th>
-              <th className="th">Entite</th><th className="th">Motif</th><th className="th">IP</th><th className="th"></th>
+              <th className="th">Entite</th><th className="th">Motif</th><th className="th"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -89,13 +87,12 @@ export function AuditPage() {
               <Fragment key={e.id}>
                 <tr className="hover:bg-slate-50">
                   <td className="td">{frDateTime(e.timestamp)}</td>
-                  <td className="td">{e.userLabel ?? '—'}</td>
+                  <td className="td">{e.user_label ?? '—'}</td>
                   <td className="td"><span className={`badge ${ACTION_COLORS[e.action] ?? 'bg-slate-100'}`}>{e.action}</span></td>
-                  <td className="td">{e.entity}</td>
+                  <td className="td">{e.entity}{e.entity_id ? ` #${e.entity_id.slice(0, 8)}` : ''}</td>
                   <td className="td max-w-[260px] truncate" title={e.reason ?? ''}>{e.reason ?? '—'}</td>
-                  <td className="td text-xs text-slate-400">{e.ipAddress ?? '—'}</td>
                   <td className="td">
-                    {(e.oldValue != null || e.newValue != null) && (
+                    {(e.old_value != null || e.new_value != null) && (
                       <button className="text-xs text-brand-700 hover:underline" onClick={() => setExpanded(expanded === e.id ? null : e.id)}>
                         {expanded === e.id ? 'Masquer' : 'Details'}
                       </button>
@@ -104,15 +101,15 @@ export function AuditPage() {
                 </tr>
                 {expanded === e.id && (
                   <tr>
-                    <td colSpan={7} className="bg-slate-50 px-4 py-3">
+                    <td colSpan={6} className="bg-slate-50 px-4 py-3">
                       <div className="grid grid-cols-2 gap-4 text-xs">
                         <div>
                           <div className="mb-1 font-semibold text-slate-500">Avant</div>
-                          <pre className="overflow-x-auto rounded bg-white p-2 text-slate-700">{JSON.stringify(e.oldValue, null, 2) || '—'}</pre>
+                          <pre className="overflow-x-auto rounded bg-white p-2 text-slate-700">{e.old_value ? JSON.stringify(e.old_value, null, 2) : '—'}</pre>
                         </div>
                         <div>
                           <div className="mb-1 font-semibold text-slate-500">Apres</div>
-                          <pre className="overflow-x-auto rounded bg-white p-2 text-slate-700">{JSON.stringify(e.newValue, null, 2) || '—'}</pre>
+                          <pre className="overflow-x-auto rounded bg-white p-2 text-slate-700">{e.new_value ? JSON.stringify(e.new_value, null, 2) : '—'}</pre>
                         </div>
                       </div>
                     </td>
